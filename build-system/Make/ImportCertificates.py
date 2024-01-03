@@ -10,7 +10,7 @@ def import_certificates(certificatesPath):
         sys.exit(1)
 
     keychain_name = 'temp.keychain'
-    keychain_password = 'secret'
+    keychain_password = 'admin'
 
     existing_keychains = run_executable_with_output('security', arguments=['list-keychains'], check_result=True)
     if keychain_name in existing_keychains:
