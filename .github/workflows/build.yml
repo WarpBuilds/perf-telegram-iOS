@@ -11,12 +11,15 @@ jobs:
     runs-on: macos-13
 
     steps:
+      - name: Extract branch name
+        shell: bash
+        run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+        id: extract_branch
       - uses: actions/checkout@v2
         with:
           repository: 'TelegramMessenger/Telegram-iOS'
           submodules: 'recursive'
           fetch-depth: '0'
-      - uses: nelonoel/branch-name@v1
       - name: Change remote to warpbuild
         run: |
           echo "Before change"
@@ -25,8 +28,8 @@ jobs:
           git remote set-url origin https://github.com/WarpBuilds/perf-telegram-iOS.git
           echo "After change"
           git remote -v
-          echo "Pulling from ${BRANCH_NAME}"
-          git pull origin ${BRANCH_NAME}
+          echo "Pulling from ${{ steps.extract_branch.outputs.branch }}"
+          git pull origin ${{ steps.extract_branch.outputs.branch }}
       - name: Set active Xcode path
         run: |
           XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
