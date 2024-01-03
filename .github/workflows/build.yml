@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: macOS-13-xlarge
+    runs-on: warpdev-macos-13-arm64-3x
 
     steps:
       - name: Extract branch name
