@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
+          repository: 'TelegramMessenger/Telegram-iOS'
           submodules: 'recursive'
           fetch-depth: '0'
 
