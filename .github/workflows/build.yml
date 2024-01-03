@@ -16,7 +16,17 @@ jobs:
           repository: 'TelegramMessenger/Telegram-iOS'
           submodules: 'recursive'
           fetch-depth: '0'
-
+      - uses: nelonoel/branch-name@v1
+      - name: Change remote to warpbuild
+        run: |
+          echo "Before change"
+          git remote -v
+          echo "Changing"
+          git remote set-url origin https://github.com/WarpBuilds/perf-telegram-iOS.git
+          echo "After change"
+          git remote -v
+          echo "Pulling from ${BRANCH_NAME}"
+          git pull origin ${BRANCH_NAME}
       - name: Set active Xcode path
         run: |
           XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
