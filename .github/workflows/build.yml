@@ -11,6 +11,10 @@ jobs:
     runs-on: warpdev-macos-13-arm64-3x
 
     steps:
+      - name: Debug
+        run: |
+          echo "Printing default keychain"
+          security default-keychain
       - name: Extract branch name
         shell: bash
         run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
