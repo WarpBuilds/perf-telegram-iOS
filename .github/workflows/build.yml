@@ -15,6 +15,21 @@ jobs:
         run: |
           echo "Printing default keychain"
           security default-keychain
+          echo "Trying to unlock keychain"
+          security unlock-keychain -p fds
+          # Generate a random keychain name using current time and a random number
+          KEYCHAIN_NAME="random_$(date +%s).keychain"
+          
+          # Generate a random password for the keychain
+          KEYCHAIN_PASSWORD="$(date +%s)"
+          
+          # Create the keychain with the generated name and password
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          
+          # Output the details
+          echo "Created keychain: $KEYCHAIN_NAME"
+          echo "Keychain Password: $KEYCHAIN_PASSWORD"
+          
       - name: Extract branch name
         shell: bash
         run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
