@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Debug
         run: |
+          echo "Printing all environment variables"
+          printenv
           echo "Printing default keychain"
           security default-keychain
           echo "Trying to unlock keychain"
