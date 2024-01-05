@@ -53,7 +53,8 @@ jobs:
           git pull origin ${{ steps.extract_branch.outputs.branch }}
       - name: Set active Xcode path
         run: |
-          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
+          XCODE_VERSION="$(cat versions.json | jq -r '.xcode')"
+          echo "XCODE VERSION: $XCODE_VERSION"
           sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
 
       - name: Create canonical source directory
