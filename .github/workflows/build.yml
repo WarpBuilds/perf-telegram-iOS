@@ -1,14 +1,20 @@
 name: CI
 
 on:
-  push:
-    branches: [ master ]
+  # push:
+  #   branches: [ master ]
 
   workflow_dispatch:
+    inputs:
+      runson:
+        description: 'Runs on machine'
+        required: true
+        type: string
+        default: warp-macos-13-arm64-3x
 
 jobs:
   build:
-    runs-on: warpdev-macos-13-arm64-3x
+    runs-on: ${{ inputs.runson }}
 
     steps:
       - name: Debug
