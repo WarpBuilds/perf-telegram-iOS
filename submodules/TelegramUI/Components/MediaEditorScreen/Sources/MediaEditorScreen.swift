@@ -39,6 +39,7 @@ import VolumeSliderContextItem
 import TelegramStringFormatting
 import ForwardInfoPanelComponent
 import ContextReferenceButtonComponent
+import MediaScrubberComponent
 
 private let playbackButtonTag = GenericComponentViewTag()
 private let muteButtonTag = GenericComponentViewTag()
@@ -1359,6 +1360,8 @@ final class MediaEditorScreenComponent: Component {
                     transition: scrubberTransition,
                     component: AnyComponent(MediaScrubberComponent(
                         context: component.context,
+                        style: .editor,
+                        theme: environment.theme,
                         generationTimestamp: playerState.generationTimestamp,
                         position: playerState.position,
                         minDuration: minDuration,
@@ -2473,7 +2476,7 @@ public final class MediaEditorScreen: ViewController, UIDropInteractionDelegate 
                             messageEntity.secondaryRenderImage = result.nightImage
                             messageEntity.overlayRenderImage = result.overlayImage
                             messageEntity.referenceDrawingSize = storyDimensions
-                            messageEntity.position = CGPoint(x: storyDimensions.width / 2.0, y: storyDimensions.height / 2.0)
+                            messageEntity.position = CGPoint(x: storyDimensions.width / 2.0 - 54.0, y: storyDimensions.height / 2.0)
                             
                             let fraction = max(result.size.width, result.size.height) / 353.0
                             messageEntity.scale = min(6.0, 3.3 * fraction)
@@ -3374,6 +3377,13 @@ public final class MediaEditorScreen: ViewController, UIDropInteractionDelegate 
                     let updatedImage = roundedImageWithTransparentCorners(image: image, cornerRadius: floor(image.size.width * 0.03))!
                     let entity = DrawingStickerEntity(content: .image(updatedImage, .rectangle))
                     entity.canCutOut = false
+                    
+                    let _ = (cutoutStickerImage(from: image)
+                    |> deliverOnMainQueue).start(next: { [weak entity] result in
+                        if result != nil, let entity {
+                            entity.canCutOut = true
+                        }
+                    })
                     
                     self?.interaction?.insertEntity(entity, scale: 2.5)
                 }
@@ -6073,4 +6083,24 @@ private func setupButtonShadow(_ view: UIView, radius: CGFloat = 2.0) {
     view.layer.shadowRadius = radius
     view.layer.shadowColor = UIColor.black.cgColor
     view.layer.shadowOpacity = 0.35
+}
+
+extension MediaScrubberComponent.Track {
+    public init(_ track: MediaEditorPlayerState.Track) {
+        let content: MediaScrubberComponent.Track.Content
+        switch track.content {
+        case let .video(frames, framesUpdateTimestamp):
+            content = .video(frames: frames, framesUpdateTimestamp: framesUpdateTimestamp)
+        case let .audio(artist, title, samples, peak):
+            content = .audio(artist: artist, title: title, samples: samples, peak: peak)
+        }
+        self.init(
+            id: track.id,
+            content: content,
+            duration: track.duration,
+            trimRange: track.trimRange,
+            offset: track.offset,
+            isMain: track.isMain
+        )
+    }
 }
