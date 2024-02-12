@@ -10,7 +10,7 @@ on:
         description: 'Runs on machine'
         required: true
         type: string
-        default: warp-macos-13-arm64-6x
+        default: warp-macos-14-arm64-6x
 
 jobs:
   build:
