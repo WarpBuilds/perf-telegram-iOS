@@ -26,6 +26,7 @@ import MediaResources
 import LocalMediaResources
 import ImageCompression
 import LegacyMediaPickerUI
+import TelegramAudio
 
 struct CameraState: Equatable {
     enum Recording: Equatable {
@@ -170,6 +171,8 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
         private var resultDisposable = MetaDisposable()
                 
         var cameraState: CameraState?
+        
+        var didDisplayViewOnce = false
                     
         private let hapticFeedback = HapticFeedback()
         
@@ -355,12 +358,18 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
             }
             
             if let controller = component.getController() {
-                if controller.isSendingImmediately || controller.scheduledLock {
+                if controller.scheduledLock {
                     showViewOnce = true
                 }
                 if !controller.viewOnceAvailable {
                     showViewOnce = false
                 }
+            }
+            
+            if state.didDisplayViewOnce {
+                showViewOnce = true
+            } else if showViewOnce {
+                state.didDisplayViewOnce = true
             }
             
             if !component.isPreviewing {
@@ -377,6 +386,7 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
                             )
                         ),
                         minSize: CGSize(width: 44.0, height: 44.0),
+                        isExclusive: false,
                         action: { [weak state] in
                             if let state {
                                 state.togglePosition()
@@ -575,7 +585,7 @@ public class VideoMessageCameraScreen: ViewController {
                 if self.cameraState.isViewOnceEnabled != oldValue.isViewOnceEnabled {
                     if self.cameraState.isViewOnceEnabled {
                         let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
-                        self.displayViewOnceTooltip(text: presentationData.strings.Chat_PlayVideoMessageOnceTooltip, hasIcon: false)
+                        self.displayViewOnceTooltip(text: presentationData.strings.Chat_PlayVideoMessageOnceTooltip, hasIcon: true)
                         
                         let _ = ApplicationSpecificNotice.incrementVideoMessagesPlayOnceSuggestion(accountManager: self.context.sharedContext.accountManager, count: 3).startStandalone()
                     } else {
@@ -672,15 +682,9 @@ public class VideoMessageCameraScreen: ViewController {
                 }
                 self.loadingView.alpha = 0.0
                 self.additionalPreviewView.removePlaceholder(delay: 0.0)
-                
-                Queue.mainQueue().after(0.15) {
-                    self.startRecording.invoke(Void())
-                }
             })
                         
             self.idleTimerExtensionDisposable.set(self.context.sharedContext.applicationBindings.pushIdleTimerExtension())
-            
-            self.setupCamera()
         }
         
         deinit {
@@ -689,28 +693,19 @@ public class VideoMessageCameraScreen: ViewController {
         }
         
         func withReadyCamera(isFirstTime: Bool = false, _ f: @escaping () -> Void) {
-            guard let controller = self.controller else {
-                return
-            }
+            let previewReady: Signal<Bool, NoError>
             if #available(iOS 13.0, *) {
-                let _ = (combineLatest(queue: Queue.mainQueue(),
-                    self.cameraState.isDualCameraEnabled ? self.additionalPreviewView.isPreviewing : self.mainPreviewView.isPreviewing,
-                    controller.audioSessionReady.get()
-                )
-                |> filter { $0 && $1 }
-                |> take(1)).startStandalone(next: { _, _ in
-                    f()
-                })
+                previewReady = self.cameraState.isDualCameraEnabled ? self.additionalPreviewView.isPreviewing : self.mainPreviewView.isPreviewing |> delay(0.25, queue: Queue.mainQueue())
             } else {
-                let _ = (combineLatest(queue: Queue.mainQueue(),
-                    .single(true) |> delay(0.35, queue: Queue.mainQueue()),
-                    controller.audioSessionReady.get()
-                )
-                |> filter { $0 && $1 }
-                |> take(1)).startStandalone(next: { _, _ in
-                    f()
-                })
+                previewReady = .single(true) |> delay(0.35, queue: Queue.mainQueue())
             }
+            
+            let _ = (previewReady
+            |> filter { $0 }
+            |> take(1)
+            |> deliverOnMainQueue).startStandalone(next: { _ in
+                f()
+            })
         }
         
         func setupLiveUpload(filePath: String) {
@@ -734,7 +729,7 @@ public class VideoMessageCameraScreen: ViewController {
             self.view.addGestureRecognizer(pinchGestureRecognizer)
         }
                 
-        private func setupCamera() {
+        fileprivate func setupCamera() {
             guard self.camera == nil else {
                 return
             }
@@ -745,7 +740,7 @@ public class VideoMessageCameraScreen: ViewController {
                     position: self.cameraState.position,
                     isDualEnabled: self.cameraState.isDualCameraEnabled,
                     audio: true,
-                    photo: true,
+                    photo: false,
                     metadata: false,
                     isRoundVideo: true
                 ),
@@ -771,6 +766,10 @@ public class VideoMessageCameraScreen: ViewController {
             camera.startCapture()
             
             self.camera = camera
+            
+            Queue.mainQueue().justDispatch {
+                self.startRecording.invoke(Void())
+            }
         }
         
         @objc private func handlePinch(_ gestureRecognizer: UIPinchGestureRecognizer) {
@@ -1118,9 +1117,22 @@ public class VideoMessageCameraScreen: ViewController {
             let previewSide = min(369.0, layout.size.width - 24.0)
             let previewFrame: CGRect
             if layout.metrics.isTablet {
-                previewFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((layout.size.width - previewSide) / 2.0), y: max(layout.statusBarHeight ?? 0.0 + 24.0, availableHeight * 0.2 - previewSide / 2.0)), size: CGSize(width: previewSide, height: previewSide))
+                let statusBarOrientation: UIInterfaceOrientation
+                if #available(iOS 13.0, *) {
+                    statusBarOrientation = UIApplication.shared.windows.first?.windowScene?.interfaceOrientation ?? .portrait
+                } else {
+                    statusBarOrientation = UIApplication.shared.statusBarOrientation
+                }
+                
+                if statusBarOrientation == .landscapeLeft {
+                    previewFrame = CGRect(origin: CGPoint(x: layout.size.width - 44.0 - previewSide, y: floorToScreenPixels((layout.size.height - previewSide) / 2.0)), size: CGSize(width: previewSide, height: previewSide))
+                } else if statusBarOrientation == .landscapeRight {
+                    previewFrame = CGRect(origin: CGPoint(x: 44.0, y: floorToScreenPixels((layout.size.height - previewSide) / 2.0)), size: CGSize(width: previewSide, height: previewSide))
+                } else {
+                    previewFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((layout.size.width - previewSide) / 2.0), y: max(layout.statusBarHeight ?? 0.0 + 24.0, availableHeight * 0.2 - previewSide / 2.0)), size: CGSize(width: previewSide, height: previewSide))
+                }
             } else {
-                previewFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((layout.size.width - previewSide) / 2.0), y: max(layout.statusBarHeight ?? 0.0 + 16.0, availableHeight * 0.4 - previewSide / 2.0)), size: CGSize(width: previewSide, height: previewSide))
+                previewFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((layout.size.width - previewSide) / 2.0), y: max(layout.statusBarHeight ?? 0.0 + 24.0, availableHeight * 0.4 - previewSide / 2.0)), size: CGSize(width: previewSide, height: previewSide))
             }
             if !self.animatingIn {
                 transition.setFrame(view: self.previewContainerView, frame: previewFrame)
@@ -1252,7 +1264,6 @@ public class VideoMessageCameraScreen: ViewController {
     fileprivate let completion: (EnqueueMessage?, Bool?, Int32?) -> Void
     
     private var audioSessionDisposable: Disposable?
-    fileprivate let audioSessionReady = ValuePromise<Bool>(false)
     
     private let hapticFeedback = HapticFeedback()
     
@@ -1324,7 +1335,7 @@ public class VideoMessageCameraScreen: ViewController {
         
     public func takenRecordedData() -> Signal<RecordedVideoData?, NoError> {
         let previewState = self.node.previewStatePromise.get()
-        let count = 12
+        let count = 13
         
         let initialPlaceholder: Signal<UIImage?, NoError>
         if let firstResult = self.node.results.first {
@@ -1442,9 +1453,10 @@ public class VideoMessageCameraScreen: ViewController {
             return
         }
         
+        var skipAction = false
         let currentTimestamp = CACurrentMediaTime()
         if let lastActionTimestamp = self.lastActionTimestamp, currentTimestamp - lastActionTimestamp < 0.5 {
-            return
+            skipAction = true
         }
         
         if case .none = self.cameraState.recording, self.node.results.isEmpty {
@@ -1454,9 +1466,21 @@ public class VideoMessageCameraScreen: ViewController {
         
         if case .none = self.cameraState.recording {
         } else {
-            self.isSendingImmediately = true
-            self.waitingForNextResult = true
-            self.node.stopRecording.invoke(Void())
+            if self.cameraState.duration > 0.5 {
+                if skipAction {
+                    return
+                }
+                self.isSendingImmediately = true
+                self.waitingForNextResult = true
+                self.node.stopRecording.invoke(Void())
+            } else {
+                self.completion(nil, nil, nil)
+                return
+            }
+        }
+        
+        guard !skipAction else {
+            return
         }
         
         self.didSend = true
@@ -1498,78 +1522,97 @@ public class VideoMessageCameraScreen: ViewController {
             
             let dimensions = PixelDimensions(width: 400, height: 400)
             
-            var thumbnailImage = video.thumbnail
+            let thumbnailImage: Signal<UIImage, NoError>
             if startTime > 0.0 {
-                let composition = composition(with: results)
-                let imageGenerator = AVAssetImageGenerator(asset: composition)
-                imageGenerator.maximumSize = dimensions.cgSize
-                imageGenerator.appliesPreferredTrackTransform = true
-                
-                if let cgImage = try? imageGenerator.copyCGImage(at: CMTime(seconds: startTime, preferredTimescale: composition.duration.timescale), actualTime: nil) {
-                    thumbnailImage = UIImage(cgImage: cgImage)
+                thumbnailImage = Signal { subscriber in
+                    let composition = composition(with: results)
+                    let imageGenerator = AVAssetImageGenerator(asset: composition)
+                    imageGenerator.maximumSize = dimensions.cgSize
+                    imageGenerator.appliesPreferredTrackTransform = true
+                    
+                    imageGenerator.generateCGImagesAsynchronously(forTimes: [NSValue(time: CMTime(seconds: startTime, preferredTimescale: composition.duration.timescale))], completionHandler: { _, image, _, _, _ in
+                        if let image {
+                            subscriber.putNext(UIImage(cgImage: image))
+                        } else {
+                            subscriber.putNext(video.thumbnail)
+                        }
+                        subscriber.putCompletion()
+                    })
+                    
+                    return ActionDisposable {
+                        imageGenerator.cancelAllCGImageGeneration()
+                    }
                 }
-            }
-            
-            let values = MediaEditorValues(peerId: self.context.account.peerId, originalDimensions: dimensions, cropOffset: .zero, cropRect: CGRect(origin: .zero, size: dimensions.cgSize), cropScale: 1.0, cropRotation: 0.0, cropMirroring: false, cropOrientation: nil, gradientColors: nil, videoTrimRange: self.node.previewState?.trimRange, videoIsMuted: false, videoIsFullHd: false, videoIsMirrored: false, videoVolume: nil, additionalVideoPath: nil, additionalVideoIsDual: false, additionalVideoPosition: nil, additionalVideoScale: nil, additionalVideoRotation: nil, additionalVideoPositionChanges: [], additionalVideoTrimRange: nil, additionalVideoOffset: nil, additionalVideoVolume: nil, nightTheme: false, drawing: nil, entities: [], toolValues: [:], audioTrack: nil, audioTrackTrimRange: nil, audioTrackOffset: nil, audioTrackVolume: nil, audioTrackSamples: nil, qualityPreset: .videoMessage)
-            
-            var resourceAdjustments: VideoMediaResourceAdjustments? = nil
-            if let valuesData = try? JSONEncoder().encode(values) {
-                let data = MemoryBuffer(data: valuesData)
-                let digest = MemoryBuffer(data: data.md5Digest())
-                resourceAdjustments = VideoMediaResourceAdjustments(data: data, digest: digest, isStory: false)
-            }
- 
-            let resource: TelegramMediaResource
-            let liveUploadData: LegacyLiveUploadInterfaceResult?
-            if let current = self.node.currentLiveUploadData {
-                liveUploadData = current
             } else {
-                liveUploadData = self.node.liveUploadInterface?.fileUpdated(true) as? LegacyLiveUploadInterfaceResult
-            }
-            if !hasAdjustments, let liveUploadData, let data = try? Data(contentsOf: URL(fileURLWithPath: video.videoPath)) {
-                resource = LocalFileMediaResource(fileId: liveUploadData.id)
-                self.context.account.postbox.mediaBox.storeResourceData(resource.id, data: data, synchronous: true)
-            } else {
-                resource = LocalFileVideoMediaResource(randomId: Int64.random(in: Int64.min ... Int64.max), paths: videoPaths, adjustments: resourceAdjustments)
+                thumbnailImage = .single(video.thumbnail)
             }
             
-            var previewRepresentations: [TelegramMediaImageRepresentation] = []
-                        
-            let thumbnailResource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
-            let thumbnailSize = video.dimensions.cgSize.aspectFitted(CGSize(width: 320.0, height: 320.0))
-            if let thumbnailData = scaleImageToPixelSize(image: thumbnailImage, size: thumbnailSize)?.jpegData(compressionQuality: 0.4) {
-                self.context.account.postbox.mediaBox.storeResourceData(thumbnailResource.id, data: thumbnailData)
-                previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: thumbnailResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
-            }
-            
-            let tempFile = TempBox.shared.tempFile(fileName: "file")
-            defer {
-                TempBox.shared.dispose(tempFile)
-            }
-            if let data = compressImageToJPEG(thumbnailImage, quality: 0.7, tempFilePath: tempFile.path) {
-                context.account.postbox.mediaBox.storeCachedResourceRepresentation(resource, representation: CachedVideoFirstFrameRepresentation(), data: data)
-            }
+            let _ = (thumbnailImage
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] thumbnailImage in
+                guard let self else {
+                    return
+                }
+                let values = MediaEditorValues(peerId: self.context.account.peerId, originalDimensions: dimensions, cropOffset: .zero, cropRect: CGRect(origin: .zero, size: dimensions.cgSize), cropScale: 1.0, cropRotation: 0.0, cropMirroring: false, cropOrientation: nil, gradientColors: nil, videoTrimRange: self.node.previewState?.trimRange, videoIsMuted: false, videoIsFullHd: false, videoIsMirrored: false, videoVolume: nil, additionalVideoPath: nil, additionalVideoIsDual: false, additionalVideoPosition: nil, additionalVideoScale: nil, additionalVideoRotation: nil, additionalVideoPositionChanges: [], additionalVideoTrimRange: nil, additionalVideoOffset: nil, additionalVideoVolume: nil, nightTheme: false, drawing: nil, entities: [], toolValues: [:], audioTrack: nil, audioTrackTrimRange: nil, audioTrackOffset: nil, audioTrackVolume: nil, audioTrackSamples: nil, qualityPreset: .videoMessage)
+                
+                var resourceAdjustments: VideoMediaResourceAdjustments? = nil
+                if let valuesData = try? JSONEncoder().encode(values) {
+                    let data = MemoryBuffer(data: valuesData)
+                    let digest = MemoryBuffer(data: data.md5Digest())
+                    resourceAdjustments = VideoMediaResourceAdjustments(data: data, digest: digest, isStory: false)
+                }
+     
+                let resource: TelegramMediaResource
+                let liveUploadData: LegacyLiveUploadInterfaceResult?
+                if let current = self.node.currentLiveUploadData {
+                    liveUploadData = current
+                } else {
+                    liveUploadData = self.node.liveUploadInterface?.fileUpdated(true) as? LegacyLiveUploadInterfaceResult
+                }
+                if !hasAdjustments, let liveUploadData, let data = try? Data(contentsOf: URL(fileURLWithPath: video.videoPath)) {
+                    resource = LocalFileMediaResource(fileId: liveUploadData.id)
+                    self.context.account.postbox.mediaBox.storeResourceData(resource.id, data: data, synchronous: true)
+                } else {
+                    resource = LocalFileVideoMediaResource(randomId: Int64.random(in: Int64.min ... Int64.max), paths: videoPaths, adjustments: resourceAdjustments)
+                }
+                
+                var previewRepresentations: [TelegramMediaImageRepresentation] = []
+                            
+                let thumbnailResource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
+                let thumbnailSize = video.dimensions.cgSize.aspectFitted(CGSize(width: 320.0, height: 320.0))
+                if let thumbnailData = scaleImageToPixelSize(image: thumbnailImage, size: thumbnailSize)?.jpegData(compressionQuality: 0.4) {
+                    self.context.account.postbox.mediaBox.storeResourceData(thumbnailResource.id, data: thumbnailData)
+                    previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: thumbnailResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
+                }
+                
+                let tempFile = TempBox.shared.tempFile(fileName: "file")
+                defer {
+                    TempBox.shared.dispose(tempFile)
+                }
+                if let data = compressImageToJPEG(thumbnailImage, quality: 0.7, tempFilePath: tempFile.path) {
+                    context.account.postbox.mediaBox.storeCachedResourceRepresentation(resource, representation: CachedVideoFirstFrameRepresentation(), data: data)
+                }
 
-            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: [.FileName(fileName: "video.mp4"), .Video(duration: finalDuration, size: video.dimensions, flags: [.instantRoundVideo], preloadSize: nil)])
-            
-            
-            var attributes: [MessageAttribute] = []
-            if self.cameraState.isViewOnceEnabled {
-                attributes.append(AutoremoveTimeoutMessageAttribute(timeout: viewOnceTimeout, countdownBeginTime: nil))
-            }
-    
-            self.completion(.message(
-                text: "",
-                attributes: attributes,
-                inlineStickers: [:],
-                mediaReference: .standalone(media: media),
-                threadId: nil,
-                replyToMessageId: nil,
-                replyToStoryId: nil,
-                localGroupingKey: nil,
-                correlationId: nil,
-                bubbleUpEmojiOrStickersets: []
-            ), silentPosting, scheduleTime)
+                let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: [.FileName(fileName: "video.mp4"), .Video(duration: finalDuration, size: video.dimensions, flags: [.instantRoundVideo], preloadSize: nil)])
+                
+                
+                var attributes: [MessageAttribute] = []
+                if self.cameraState.isViewOnceEnabled {
+                    attributes.append(AutoremoveTimeoutMessageAttribute(timeout: viewOnceTimeout, countdownBeginTime: nil))
+                }
+        
+                self.completion(.message(
+                    text: "",
+                    attributes: attributes,
+                    inlineStickers: [:],
+                    mediaReference: .standalone(media: media),
+                    threadId: nil,
+                    replyToMessageId: nil,
+                    replyToStoryId: nil,
+                    localGroupingKey: nil,
+                    correlationId: nil,
+                    bubbleUpEmojiOrStickersets: []
+                ), silentPosting, scheduleTime)
+            })
         })
     }
     
@@ -1628,12 +1671,21 @@ public class VideoMessageCameraScreen: ViewController {
     }
     
     private func requestAudioSession() {
-        self.audioSessionDisposable = self.context.sharedContext.mediaManager.audioSession.push(audioSessionType: .recordWithOthers, activate: { [weak self] _ in
+        let audioSessionType: ManagedAudioSessionType
+        if self.context.sharedContext.currentMediaInputSettings.with({ $0 }).pauseMusicOnRecording { 
+            audioSessionType = .record(speaker: false, withOthers: false)
+        } else {
+            audioSessionType = .recordWithOthers
+        }
+      
+        self.audioSessionDisposable = self.context.sharedContext.mediaManager.audioSession.push(audioSessionType: audioSessionType, activate: { [weak self] _ in
             if #available(iOS 13.0, *) {
                 try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
             }
             if let self {
-                self.audioSessionReady.set(true)
+                Queue.mainQueue().async {
+                    self.node.setupCamera()
+                }
             }
         }, deactivate: { _ in
             return .single(Void())
