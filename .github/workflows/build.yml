@@ -56,7 +56,7 @@ jobs:
           echo "After change"
           git remote -v
           echo "Pulling from ${{ steps.extract_branch.outputs.branch }}"
-          git pull origin ${{ steps.extract_branch.outputs.branch }}
+          git pull origin ${{ steps.extract_branch.outputs.branch }} --no-rebase
       - name: Set active Xcode path
         run: |
           XCODE_VERSION="$(cat versions.json | jq -r '.xcode')"
